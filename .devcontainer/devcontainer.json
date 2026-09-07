@@ -1,0 +1,29 @@
+{
+  "name": "Rust LiNGAM Development",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/root/.venv/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "[rust]": {
+          "editor.formatOnSave": true
+        },
+        "[python]": {
+          "editor.formatOnSave": true
+        }
+      },
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "vadimcn.vscode-lldb"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}
