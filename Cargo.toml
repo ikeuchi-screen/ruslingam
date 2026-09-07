@@ -6,7 +6,14 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "ruslingam"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Enabled by maturin (see pyproject.toml). Left off for `cargo test` so the test
+# binary can link libpython.
+extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-pyo3 = "0.29.0"
+ndarray = "0.17.2"
+numpy = "0.29.0"
+pyo3 = { version = "0.29.0" }

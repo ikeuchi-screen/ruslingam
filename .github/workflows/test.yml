@@ -1,0 +1,32 @@
+name: Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo test
+        run: cargo test
+
+      - name: Install build + test deps
+        run: pip install maturin pytest numpy scipy lingam scikit-learn
+
+      - name: Build extension
+        run: maturin develop --release
+
+      - name: pytest
+        run: pytest -q
