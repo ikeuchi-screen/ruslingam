@@ -29,7 +29,7 @@ jobs:
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
 
       - name: Install build + test deps
-        run: pip install maturin pytest numpy scipy lingam scikit-learn
+        run: pip install maturin pytest numpy scipy scikit-learn "lingam @ git+https://github.com/cdt15/lingam.git"
 
       - name: Build extension
         run: maturin develop --release
