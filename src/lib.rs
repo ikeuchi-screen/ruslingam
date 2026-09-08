@@ -8,6 +8,7 @@ mod bootstrap;
 mod direct_lingam;
 mod hsic;
 mod lars;
+mod pool;
 mod pyclass;
 mod util;
 
@@ -16,5 +17,7 @@ mod util;
 fn ruslingam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<pyclass::DirectLiNGAM>()?;
     m.add_class::<bootstrap::BootstrapResult>()?;
+    m.add_function(wrap_pyfunction!(pool::set_num_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(pool::get_num_threads, m)?)?;
     Ok(())
 }

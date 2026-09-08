@@ -61,6 +61,23 @@ DirectLiNGAM(
 * `prior_knowledge` / `apply_prior_knowledge_softly` are accepted for signature
   compatibility only and raise `NotImplementedError` when set.
 
+## Threading
+
+The causal-order search runs in parallel. By default it uses one worker per
+logical core; set `RAYON_NUM_THREADS` in the environment before the first `fit()`
+to change that, or control it from Python at any time:
+
+```python
+import ruslingam
+
+ruslingam.set_num_threads(4)   # run the search on a dedicated pool of 4 threads
+ruslingam.set_num_threads(0)   # back to the default (all cores / RAYON_NUM_THREADS)
+ruslingam.get_num_threads()    # -> worker count currently in effect
+```
+
+Results (`causal_order_`, `adjacency_matrix_`) are identical regardless of the
+thread count.
+
 ## Differences from `lingam`
 
 1. **Adaptive Lasso** matches scikit-learn within numerical tolerance (~1e-6 on the
