@@ -3,6 +3,7 @@
 //! (so `Uc = U` and `Vj = []` everywhere).
 
 use ndarray::{Array1, Array2, ArrayView1, Axis};
+use rayon::prelude::*;
 
 use crate::adjacency::estimate_adjacency_matrix;
 
@@ -29,7 +30,9 @@ pub fn residual(xi: &ArrayView1<f64>, xj: &ArrayView1<f64>) -> Array1<f64> {
         / n;
     let var_j = xj.iter().map(|b| (b - mj) * (b - mj)).sum::<f64>() / n;
     let k = cov / var_j;
-    &xi.to_owned() - &xj.mapv(|b| k * b)
+    // element t: xi[t] - (k * xj[t]) — same arithmetic as `xi - xj.mapv(|b| k * b)`
+    // but without the two intermediate allocations.
+    Array1::from_shape_fn(xi.len(), |t| xi[t] - k * xj[t])
 }
 
 /// Maximum-entropy approximation of differential entropy (`_entropy`).
@@ -43,18 +46,6 @@ fn entropy(u: &ArrayView1<f64>) -> f64 {
     (1.0 + (2.0 * std::f64::consts::PI).ln()) / 2.0
         - K1 * (t1 - GAMMA).powi(2)
         - K2 * t2.powi(2)
-}
-
-/// `_diff_mutual_info`
-fn diff_mutual_info(
-    xi_std: &ArrayView1<f64>,
-    xj_std: &ArrayView1<f64>,
-    ri_j: &ArrayView1<f64>,
-    rj_i: &ArrayView1<f64>,
-) -> f64 {
-    let ri = ri_j.to_owned() / pop_std(ri_j);
-    let rj = rj_i.to_owned() / pop_std(rj_i);
-    (entropy(xj_std) + entropy(&ri.view())) - (entropy(xi_std) + entropy(&rj.view()))
 }
 
 fn standardize(col: &ArrayView1<f64>) -> Array1<f64> {
@@ -74,35 +65,73 @@ fn argmax_first(v: &[f64]) -> usize {
     best
 }
 
+/// `_diff_mutual_info` with the two single-column entropies supplied by the caller
+/// (they only depend on one standardized column, so they are hoisted out of the
+/// O(|u|^2) pair loop and computed once per column).
+fn diff_mutual_info_pre(
+    ent_xi: f64,
+    ent_xj: f64,
+    ri_j: &ArrayView1<f64>,
+    rj_i: &ArrayView1<f64>,
+) -> f64 {
+    let ri = ri_j.to_owned() / pop_std(ri_j);
+    let rj = rj_i.to_owned() / pop_std(rj_i);
+    (ent_xj + entropy(&ri.view())) - (ent_xi + entropy(&rj.view()))
+}
+
 /// `_search_causal_order` (no prior knowledge).
+///
+/// Two changes from a literal port, both bit-for-bit equivalent to the Python:
+///   * `_diff_mutual_info` is antisymmetric (`d(j, i) == -d(i, j)` exactly, since
+///     the two calls swap an operand pair of a single subtraction), so each
+///     unordered pair is evaluated once and its score added to both entries.
+///   * the per-pair work is spread across cores with rayon; the reduction is then
+///     replayed serially in the original `for j in U` order so the accumulated
+///     `M` values — and therefore `argmax` tie-breaking — are unchanged.
 fn search_causal_order(x: &Array2<f64>, u: &[usize]) -> usize {
-    if u.len() == 1 {
+    let len = u.len();
+    if len == 1 {
         return u[0];
     }
 
     let std_cols: Vec<Array1<f64>> = u.iter().map(|&i| standardize(&x.column(i))).collect();
+    let ent_std: Vec<f64> = std_cols.iter().map(|c| entropy(&c.view())).collect();
 
-    let mut m_list = Vec::with_capacity(u.len());
-    for (ii, &_i) in u.iter().enumerate() {
-        let xi_std = &std_cols[ii];
-        let mut m = 0.0f64;
-        for (jj, &_j) in u.iter().enumerate() {
-            if ii == jj {
-                continue;
-            }
-            let xj_std = &std_cols[jj];
-            let ri_j = residual(&xi_std.view(), &xj_std.view());
-            let rj_i = residual(&xj_std.view(), &xi_std.view());
-            let d = diff_mutual_info(
-                &xi_std.view(),
-                &xj_std.view(),
-                &ri_j.view(),
-                &rj_i.view(),
-            );
-            m += d.min(0.0).powi(2);
+    let pairs: Vec<(usize, usize)> = (0..len)
+        .flat_map(|a| (a + 1..len).map(move |b| (a, b)))
+        .collect();
+
+    let score = |&(a, b): &(usize, usize)| -> (f64, f64) {
+        let xa = std_cols[a].view();
+        let xb = std_cols[b].view();
+        let ra_b = residual(&xa, &xb);
+        let rb_a = residual(&xb, &xa);
+        let d = diff_mutual_info_pre(ent_std[a], ent_std[b], &ra_b.view(), &rb_a.view());
+        (d.min(0.0).powi(2), (-d).min(0.0).powi(2))
+    };
+
+    let contribs: Vec<(f64, f64)> = if pairs.len() >= 16 {
+        crate::pool::install(|| pairs.par_iter().map(score).collect())
+    } else {
+        pairs.iter().map(score).collect()
+    };
+
+    // Replay the accumulation in the original `for i in U: for j in U` order so
+    // each `m[i]` is summed exactly as the Python loop sums it: for index `i`,
+    // the pairs `(j, i)` for `j < i` land first (ascending `j`), then `(i, j)`
+    // for `j > i`.
+    let mut m = vec![0.0f64; len];
+    let mut idx = 0;
+    for a in 0..len {
+        for b in (a + 1)..len {
+            let (ca, cb) = contribs[idx];
+            idx += 1;
+            m[a] += ca;
+            m[b] += cb;
         }
-        m_list.push(-m); // Python: M_list.append(-1.0 * M)
     }
+
+    let m_list: Vec<f64> = m.iter().map(|&v| -v).collect();
     u[argmax_first(&m_list)]
 }
 

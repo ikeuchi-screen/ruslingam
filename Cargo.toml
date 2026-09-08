@@ -17,3 +17,8 @@ extension-module = ["pyo3/extension-module"]
 ndarray = "0.17.2"
 numpy = "0.29.0"
 pyo3 = { version = "0.29.0" }
+rayon = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
