@@ -83,13 +83,77 @@ def test_error_independence_p_values(linear_non_gaussian_data):
     [
         {"measure": "kernel"},
         {"measure": "pwling_fast"},
-        {"prior_knowledge": np.zeros((4, 4))},
-        {"apply_prior_knowledge_softly": True},
     ],
 )
 def test_unsupported_options_raise(kwargs):
     with pytest.raises(NotImplementedError):
         ruslingam.DirectLiNGAM(**kwargs)
+
+
+class TestPriorKnowledge:
+    def _pk(self, order, p=4):
+        """A (p, p) knowledge matrix asserting the given full causal order.
+
+        ``pk[i, j] == 1`` means ``x_j -> x_i`` (``x_j`` precedes ``x_i``).
+        """
+        pos = {v: k for k, v in enumerate(order)}
+        pk = -np.ones((p, p))
+        for i in range(p):
+            for j in range(p):
+                if i == j:
+                    pk[i, j] = 0
+                elif pos[j] < pos[i]:
+                    pk[i, j] = 1  # j -> i allowed
+                else:
+                    pk[i, j] = 0  # j -> i forbidden
+        return pk
+
+    def test_hard_prior_knowledge_forces_order(self, linear_non_gaussian_data):
+        X, _ = linear_non_gaussian_data
+        # data order is 0, 1, 2, 3 -- force the reverse
+        pk = self._pk([3, 2, 1, 0])
+        model = ruslingam.DirectLiNGAM(prior_knowledge=pk).fit(X)
+        assert list(map(int, model.causal_order_)) == [3, 2, 1, 0]
+
+    def test_no_path_prunes_edge(self, linear_non_gaussian_data):
+        X, _ = linear_non_gaussian_data
+        pk = -np.ones((4, 4))
+        np.fill_diagonal(pk, 0)
+        # symmetric "no path" between 1 and 2 -> no ordering effect, edge pruned
+        pk[1, 2] = 0
+        pk[2, 1] = 0
+        model = ruslingam.DirectLiNGAM(prior_knowledge=pk).fit(X)
+        assert list(map(int, model.causal_order_)) == [0, 1, 2, 3]
+        assert model.adjacency_matrix_[2, 1] == 0.0
+
+    def test_soft_prior_knowledge_runs(self, linear_non_gaussian_data):
+        X, _ = linear_non_gaussian_data
+        pk = -np.ones((4, 4))
+        np.fill_diagonal(pk, 0)
+        pk[1, 0] = 1  # 0 -> 1
+        model = ruslingam.DirectLiNGAM(
+            prior_knowledge=pk, apply_prior_knowledge_softly=True
+        ).fit(X)
+        assert sorted(map(int, model.causal_order_)) == [0, 1, 2, 3]
+
+    def test_apply_softly_without_prior_knowledge_is_noop(self, linear_non_gaussian_data):
+        X, _ = linear_non_gaussian_data
+        model = ruslingam.DirectLiNGAM(apply_prior_knowledge_softly=True).fit(X)
+        assert sorted(map(int, model.causal_order_)) == [0, 1, 2, 3]
+
+    def test_wrong_shape_raises(self, linear_non_gaussian_data):
+        X, _ = linear_non_gaussian_data
+        with pytest.raises(ValueError):
+            ruslingam.DirectLiNGAM(prior_knowledge=np.zeros((3, 3))).fit(X)
+
+    def test_inconsistent_prior_knowledge_raises(self, linear_non_gaussian_data):
+        X, _ = linear_non_gaussian_data
+        pk = -np.ones((4, 4))
+        np.fill_diagonal(pk, 0)
+        pk[0, 1] = 1
+        pk[1, 0] = 1  # 0 -> 1 and 1 -> 0
+        with pytest.raises(ValueError):
+            ruslingam.DirectLiNGAM(prior_knowledge=pk).fit(X)
 
 
 def test_bad_input_raises():

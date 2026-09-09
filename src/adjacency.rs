@@ -75,25 +75,39 @@ fn predict_adaptive_lasso(x: &Array2<f64>, predictors: &[usize], target: usize) 
 }
 
 /// `_estimate_adjacency_matrix(X, prior_knowledge=None, adaptive_lasso=...)`.
+///
+/// `prior_knowledge` (when given) is the `_Aknw` matrix with its `-1` "unknown"
+/// entries already replaced by `NaN`: a predictor `p` is dropped from `target`'s
+/// regression only when `pk[target, p]` is exactly `0` (`NaN != 0`, so unknown
+/// entries are kept). The diagonal is irrelevant here since `target` never
+/// appears among its own predictors.
 pub fn estimate_adjacency_matrix(
     x: &Array2<f64>,
     causal_order: &[usize],
     adaptive_lasso: bool,
+    prior_knowledge: Option<&Array2<f64>>,
 ) -> Array2<f64> {
     let p = x.ncols();
     let mut b = Array2::zeros((p, p));
 
     for i in 1..causal_order.len() {
         let target = causal_order[i];
-        let predictors = &causal_order[..i];
+        let predictors: Vec<usize> = match prior_knowledge {
+            Some(pk) => causal_order[..i]
+                .iter()
+                .copied()
+                .filter(|&pred| pk[[target, pred]] != 0.0)
+                .collect(),
+            None => causal_order[..i].to_vec(),
+        };
         if predictors.is_empty() {
             continue;
         }
 
         let coef = if adaptive_lasso {
-            predict_adaptive_lasso(x, predictors, target)
+            predict_adaptive_lasso(x, &predictors, target)
         } else {
-            let xp = select_columns(x, predictors);
+            let xp = select_columns(x, &predictors);
             let y = x.column(target).to_owned();
             linreg_coef(&xp, &y)
         };

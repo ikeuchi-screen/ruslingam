@@ -41,6 +41,33 @@ fn to_array2<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Array2<f
     Ok(owned)
 }
 
+/// `check_array(prior_knowledge)` followed by `np.where(Aknw < 0, np.nan, Aknw)`:
+/// require a finite 2D array, then map every negative entry (the `-1` "unknown"
+/// sentinel) to `NaN`. The square-shape check happens later, at `fit` time.
+fn parse_prior_knowledge<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Array2<f64>> {
+    let np = py.import("numpy")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("dtype", "float64")?;
+    let arr = np.getattr("asarray")?.call((obj,), Some(&kwargs))?;
+
+    let ndim: usize = arr.getattr("ndim")?.extract()?;
+    if ndim != 2 {
+        return Err(PyValueError::new_err(format!(
+            "Expected a 2D array for prior_knowledge, got a {ndim}D array."
+        )));
+    }
+
+    let ro: PyReadonlyArray2<f64> = arr.extract()?;
+    let mut owned = ro.as_array().to_owned();
+    if owned.iter().any(|v| !v.is_finite()) {
+        return Err(PyValueError::new_err(
+            "prior_knowledge contains NaN, infinity or a value too large.",
+        ));
+    }
+    owned.mapv_inplace(|v| if v < 0.0 { f64::NAN } else { v });
+    Ok(owned)
+}
+
 #[pyclass]
 pub struct DirectLiNGAM {
     random_state: Option<u64>,
@@ -48,6 +75,10 @@ pub struct DirectLiNGAM {
     measure: String,
     #[pyo3(get)]
     adaptive_lasso: bool,
+    /// `_Aknw` with negatives already replaced by `NaN`; `None` when no prior
+    /// knowledge was supplied.
+    prior_knowledge: Option<Array2<f64>>,
+    apply_prior_knowledge_softly: bool,
     causal_order: Option<Vec<usize>>,
     adjacency_matrix: Option<Array2<f64>>,
 }
@@ -63,6 +94,7 @@ impl DirectLiNGAM {
         adaptive_lasso=true,
     ))]
     fn new(
+        py: Python<'_>,
         random_state: Option<i64>,
         prior_knowledge: Option<Py<PyAny>>,
         apply_prior_knowledge_softly: bool,
@@ -74,20 +106,16 @@ impl DirectLiNGAM {
                 "ruslingam only implements measure='pwling' (got {measure:?})."
             )));
         }
-        if prior_knowledge.is_some() {
-            return Err(PyNotImplementedError::new_err(
-                "ruslingam does not yet support prior_knowledge; pass prior_knowledge=None.",
-            ));
-        }
-        if apply_prior_knowledge_softly {
-            return Err(PyNotImplementedError::new_err(
-                "ruslingam does not yet support apply_prior_knowledge_softly=True.",
-            ));
-        }
+        let prior_knowledge = match prior_knowledge {
+            Some(obj) => Some(parse_prior_knowledge(py, obj.bind(py))?),
+            None => None,
+        };
         Ok(Self {
             random_state: random_state.map(|v| v as u64),
             measure,
             adaptive_lasso,
+            prior_knowledge,
+            apply_prior_knowledge_softly,
             causal_order: None,
             adjacency_matrix: None,
         })
@@ -96,9 +124,12 @@ impl DirectLiNGAM {
     /// Fit the model to `X`; returns `self`.
     fn fit<'py>(slf: Bound<'py, Self>, x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Self>> {
         let py = slf.py();
-        let adaptive = slf.borrow().adaptive_lasso;
         let data = to_array2(py, x)?;
-        let (order, b) = crate::direct_lingam::fit(&data, adaptive);
+        let (adaptive, pk) = {
+            let me = slf.borrow();
+            (me.adaptive_lasso, me.build_prior_knowledge(data.ncols())?)
+        };
+        let (order, b) = crate::direct_lingam::fit(&data, adaptive, pk.as_ref());
         {
             let mut me = slf.borrow_mut();
             me.causal_order = Some(order);
@@ -209,9 +240,14 @@ impl DirectLiNGAM {
         }
         let n_sampling = n_sampling as usize;
 
-        let (data, adaptive, seed) = {
+        let data = to_array2(py, x)?;
+        let (adaptive, seed, pk) = {
             let me = slf.borrow();
-            (to_array2(py, x)?, me.adaptive_lasso, me.random_state)
+            (
+                me.adaptive_lasso,
+                me.random_state,
+                me.build_prior_knowledge(data.ncols())?,
+            )
         };
         let n_samples = data.nrows();
         let p = data.ncols();
@@ -238,7 +274,7 @@ impl DirectLiNGAM {
                 rx.row_mut(r).assign(&data.row(s));
             }
 
-            let (order, b) = crate::direct_lingam::fit(&rx, adaptive);
+            let (order, b) = crate::direct_lingam::fit(&rx, adaptive, pk.as_ref());
 
             let mut te = Array2::<f64>::zeros((p, p));
             for (c, &from_) in order.iter().enumerate() {
@@ -261,5 +297,27 @@ impl DirectLiNGAM {
         }
 
         Ok(BootstrapResult::new(ams, tes, resampled, p))
+    }
+}
+
+impl DirectLiNGAM {
+    /// Build the validated `PriorKnowledge` for a `fit` on `n_features` columns.
+    /// The `fit`-time checks (`_extract_partial_orders` inconsistencies, wrong
+    /// shape) surface as `ValueError`, matching `lingam`.
+    fn build_prior_knowledge(
+        &self,
+        n_features: usize,
+    ) -> PyResult<Option<crate::direct_lingam::PriorKnowledge>> {
+        match &self.prior_knowledge {
+            Some(a) => Ok(Some(
+                crate::direct_lingam::PriorKnowledge::new(
+                    a.clone(),
+                    self.apply_prior_knowledge_softly,
+                    n_features,
+                )
+                .map_err(PyValueError::new_err)?,
+            )),
+            None => Ok(None),
+        }
     }
 }

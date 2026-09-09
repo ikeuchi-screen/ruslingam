@@ -58,8 +58,11 @@ DirectLiNGAM(
 * `adaptive_lasso=True` prunes `B` with an Adaptive Lasso (`LassoLarsIC('bic')`
   reproduced in Rust); `adaptive_lasso=False` uses ordinary least squares.
 * `random_state` seeds the internal resampler used by `bootstrap`.
-* `prior_knowledge` / `apply_prior_knowledge_softly` are accepted for signature
-  compatibility only and raise `NotImplementedError` when set.
+* `prior_knowledge` is an `(n_features, n_features)` matrix of `0` / `1` / `-1`
+  entries (`pk[i, j] == 1`: `x_j` has a directed path to `x_i`; `0`: it does not;
+  `-1`: unknown). It restricts the causal-order search and prunes `B`, both in the
+  default hard mode and with `apply_prior_knowledge_softly=True`. An inconsistent
+  matrix (asserting both `i -> j` and `j -> i`) raises `ValueError`.
 
 ## Threading
 
@@ -86,8 +89,7 @@ thread count.
 2. **`bootstrap`** uses an internal RNG rather than scikit-learn's `resample`, so
    the resampled indices differ from `lingam` for a given `random_state`. Aggregate
    statistics are equivalent in distribution.
-3. `measure="kernel"`, `measure="pwling_fast"` and `prior_knowledge` are not
-   implemented yet.
+3. `measure="kernel"` and `measure="pwling_fast"` are not implemented yet.
 4. `BootstrapResult` count rankings use a stable sort; entries with equal counts
    may be ordered differently from NumPy's `argsort`.
 
