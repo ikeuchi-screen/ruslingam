@@ -6,6 +6,7 @@ use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use rayon::prelude::*;
 
 
 use crate::bootstrap::{calculate_total_effect, BootstrapResult};
@@ -170,13 +171,25 @@ impl DirectLiNGAM {
         let e = crate::direct_lingam::error_terms(&data, b);
         let p = data.ncols();
         let cols: Vec<Vec<f64>> = (0..p).map(|j| e.column(j).to_vec()).collect();
+
+        // The p(p-1)/2 pair tests are independent; run them on the thread pool.
+        let pairs: Vec<(usize, usize)> = (0..p)
+            .flat_map(|i| ((i + 1)..p).map(move |j| (i, j)))
+            .collect();
+        let results: Vec<(usize, usize, f64)> = crate::pool::install(|| {
+            pairs
+                .par_iter()
+                .map(|&(i, j)| {
+                    let (_, pval) = crate::hsic::hsic_test_gamma(&cols[i], &cols[j]);
+                    (i, j, pval)
+                })
+                .collect()
+        });
+
         let mut pv = Array2::<f64>::zeros((p, p));
-        for i in 0..p {
-            for j in (i + 1)..p {
-                let (_, pval) = crate::hsic::hsic_test_gamma(&cols[i], &cols[j]);
-                pv[[i, j]] = pval;
-                pv[[j, i]] = pval;
-            }
+        for (i, j, pval) in results {
+            pv[[i, j]] = pval;
+            pv[[j, i]] = pval;
         }
         Ok(pv.into_pyarray(py))
     }

@@ -19,5 +19,6 @@ fn ruslingam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bootstrap::BootstrapResult>()?;
     m.add_function(wrap_pyfunction!(pool::set_num_threads, m)?)?;
     m.add_function(wrap_pyfunction!(pool::get_num_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(hsic::hsic_test_gamma_py, m)?)?;
     Ok(())
 }
