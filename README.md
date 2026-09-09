@@ -9,9 +9,61 @@ Python API, so it can be used as a drop-in replacement.
 
 ## Installation
 
+`ruslingam` is not on PyPI yet, so it is built from source. There is no
+pre-built wheel: you need a **Rust toolchain** in addition to Python.
+
+### Prerequisites
+
+* **Python** >= 3.8 with `pip`
+* **Rust** >= 1.85 (the crate uses edition 2024). Install it with
+  [rustup](https://rustup.rs):
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+
+  On Windows, install "Rust" and the "Desktop development with C++" workload
+  from the Visual Studio Build Tools instead.
+
+### Option A — install straight from GitHub (recommended)
+
+This builds the extension and installs it into your current environment. Run it
+inside a virtualenv (or a conda env) so it does not touch the system Python:
+
 ```bash
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+
+pip install "git+https://github.com/ikeuchi-screen/ruslingam.git"
+```
+
+`pip` picks up the `maturin` build backend automatically; you do not need to
+install `maturin` yourself. To pin a specific commit or branch, append
+`@<ref>`, e.g. `...ruslingam.git@main`.
+
+### Option B — clone and build for development
+
+Use this if you want to hack on the Rust code. `maturin develop` compiles the
+crate and installs it into the **currently active** virtualenv, so activate one
+first.
+
+```bash
+git clone https://github.com/ikeuchi-screen/ruslingam.git
+cd ruslingam
+
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+
 pip install maturin
-maturin develop --release        # build & install into the current venv
+maturin develop --release            # drop --release for a faster debug build
+```
+
+Re-run `maturin develop` after editing the Rust sources to rebuild.
+
+### Verify
+
+```bash
+python -c "from ruslingam import DirectLiNGAM; print('ok')"
 ```
 
 ## `DirectLiNGAM`
