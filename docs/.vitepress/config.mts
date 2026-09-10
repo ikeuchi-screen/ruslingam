@@ -9,15 +9,25 @@ export default defineConfig({
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Examples', link: '/markdown-examples' }
+      { text: 'Getting Started', link: '/getting-started' },
+      { text: 'API', link: '/direct-lingam' }
     ],
 
     sidebar: [
       {
-        text: 'Examples',
+        text: 'Guide',
         items: [
-          { text: 'Markdown Examples', link: '/markdown-examples' },
-          { text: 'Runtime API Examples', link: '/api-examples' }
+          { text: 'Getting Started', link: '/getting-started' },
+          { text: 'Threading', link: '/threading' },
+          { text: 'Differences from lingam', link: '/differences' }
+        ]
+      },
+      {
+        text: 'API Reference',
+        items: [
+          { text: 'DirectLiNGAM', link: '/direct-lingam' },
+          { text: 'BootstrapResult', link: '/bootstrap' },
+          { text: 'Module functions', link: '/module-functions' }
         ]
       }
     ],
