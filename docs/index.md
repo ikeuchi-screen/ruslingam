@@ -14,18 +14,22 @@ hero:
       text: DirectLiNGAM API
       link: /direct-lingam
     - theme: alt
+      text: CAMUV API
+      link: /camuv
+    - theme: alt
       text: View on GitHub
       link: https://github.com/ikeuchi-screen/ruslingam
 
 features:
   - title: Drop-in replacement
     details: >-
-      Import `DirectLiNGAM` from `ruslingam` instead of `lingam`. The constructor,
-      `fit`, `bootstrap`, and the fitted attributes match the reference API.
+      Import `DirectLiNGAM` or `CAMUV` from `ruslingam` instead of `lingam`. The
+      constructors, `fit`, and the fitted attributes match the reference API.
   - title: Rust core
     details: >-
       The causal-order search, Adaptive Lasso pruning (LassoLarsIC "bic"), total-effect
-      estimation, and the gamma-approximation HSIC test are reimplemented in Rust.
+      estimation, the gamma-approximation HSIC test, and CAMUV's combinatorial parent
+      search with its GAM-based residualization are all reimplemented in Rust.
   - title: Parallel search
     details: >-
       The pairwise-likelihood search and the error-independence HSIC tests run on a

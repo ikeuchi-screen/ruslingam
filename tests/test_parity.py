@@ -151,3 +151,85 @@ def test_inconsistent_prior_knowledge_matches_lingam():
         lingam.DirectLiNGAM(prior_knowledge=pk).fit(X)
     with pytest.raises(ValueError):
         ruslingam.DirectLiNGAM(prior_knowledge=pk).fit(X)
+
+
+def _adjacency_matrices_equal(a, b):
+    """NaN-aware exact equality for CAMUV's discrete (0/1/NaN) adjacency matrix."""
+    return np.array_equal(np.isnan(a), np.isnan(b)) and np.array_equal(
+        np.nan_to_num(a), np.nan_to_num(b)
+    )
+
+
+def _confounded_sem(seed, n=500):
+    """A mix of a plain linear edge and a pair sharing a latent confounder
+    through two different non-monotonic functions (see ``confounded_data`` in
+    ``conftest.py`` for why the functions must differ / be non-invertible: a
+    purely linear shared latent is trivially identified as a direct edge
+    instead of flagged as confounded).
+    """
+    rng = np.random.default_rng(seed)
+
+    def noise(scale=1.0):
+        return scale * rng.uniform(-1.0, 1.0, n) ** 3
+
+    x0 = noise()
+    x1 = 2.0 * x0 + noise()
+
+    latent = rng.uniform(-2.0, 2.0, n)
+    x2 = np.sin(2 * latent) + 0.2 * noise()
+    x3 = np.cos(3 * latent) + 0.2 * noise()
+
+    x4 = noise()
+
+    X = np.c_[x0, x1, x2, x3, x4]
+    perm = rng.permutation(5)
+    return X[:, perm]
+
+
+def _plain_sem(seed, n=500, p=6, density=0.4):
+    """A confounder-free random additive SEM (reuses ``_random_sem``'s style)
+    so CAMUV's parent-recovery path is also exercised without any latent
+    confounding in the mix.
+    """
+    return _random_sem(seed, n=n, p=p, density=density)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_camuv_matches_lingam_on_confounded_sem(seed):
+    X = _confounded_sem(seed)
+    ref = lingam.CAMUV().fit(X)
+    rus = ruslingam.CAMUV().fit(X)
+    assert _adjacency_matrices_equal(ref.adjacency_matrix_, rus.adjacency_matrix_)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_camuv_matches_lingam_on_plain_sem(seed):
+    X = _plain_sem(seed)
+    ref = lingam.CAMUV().fit(X)
+    rus = ruslingam.CAMUV().fit(X)
+    assert _adjacency_matrices_equal(ref.adjacency_matrix_, rus.adjacency_matrix_)
+
+
+def test_camuv_matches_lingam_with_num_explanatory_vals_3():
+    # exercises the multi-column HSIC path in `_get_child` (parents.len() > 1),
+    # which only occurs once num_explanatory_vals > 2.
+    X = _plain_sem(1, n=400, p=5)
+    ref = lingam.CAMUV(num_explanatory_vals=3).fit(X)
+    rus = ruslingam.CAMUV(num_explanatory_vals=3).fit(X)
+    assert _adjacency_matrices_equal(ref.adjacency_matrix_, rus.adjacency_matrix_)
+
+
+def test_camuv_prior_knowledge_matches_lingam(confounded_data):
+    X, truth = confounded_data
+    child, parent = truth["parent_edge"]
+    pk = [(parent, child)]
+    ref = lingam.CAMUV(prior_knowledge=pk).fit(X)
+    rus = ruslingam.CAMUV(prior_knowledge=pk).fit(X)
+    assert _adjacency_matrices_equal(ref.adjacency_matrix_, rus.adjacency_matrix_)
+
+
+def test_camuv_unsupported_independence_matches_lingam():
+    with pytest.raises(ValueError):
+        lingam.CAMUV(independence="bogus")
+    with pytest.raises(ValueError):
+        ruslingam.CAMUV(independence="bogus")

@@ -1,5 +1,8 @@
 //! Port of `lingam/hsic.py` restricted to `bw_method="mdbs"` (median-distance
-//! bandwidth), used by `get_error_independence_p_values`.
+//! bandwidth). Used by `DirectLiNGAM::get_error_independence_p_values` (always
+//! single-column `X`/`Y`) and by `CAMUV` (single- *and* multi-column `Y`, since
+//! `_get_child` tests a residual against `Y[:, parents]` where `parents` can have
+//! more than one column once `num_explanatory_vals > 2`).
 //!
 //! The gamma-approximation test is inherently O(n^2); this implementation keeps
 //! that complexity but strips the Python version's intermediate work:
@@ -11,8 +14,12 @@
 //!   mean under H0 is closed-form;
 //! * only the strict upper triangle of the symmetric grams is built and scanned;
 //! * for large `n` the build and the two reduction passes run on rayon (routed
-//!   through the user thread pool, see [`crate::pool`]).
+//!   through the user thread pool, see [`crate::pool`]);
+//! * the common single-column case (`X`/`Y` each `(n, 1)`) uses a dedicated fast
+//!   path with no per-pair column loop; the general multi-column case (needed
+//!   only by `CAMUV` with `num_explanatory_vals > 2`) loops over columns per pair.
 
+use ndarray::ArrayView2;
 use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -29,15 +36,34 @@ const PAR_THRESHOLD: usize = 1024;
 /// scaling with the pool width — the per-row work here is tiny.
 const MIN_ROWS_PER_JOB: usize = 256;
 
-/// `get_kernel_width` for a single-column input: sqrt(0.5 * median of the
-/// positive squared pairwise distances over the first <=100 points).
-fn kernel_width(x: &[f64]) -> f64 {
-    let n = x.len().min(100);
-    let xm = &x[..n];
+/// Squared Euclidean distance between rows `i` and `j` of `x` (an `(n, k)`
+/// array), i.e. `get_kernel_width`/`get_gram_matrix`'s `||x_i - x_j||^2`
+/// generalised to `k >= 1` columns. `k == 1` is the overwhelmingly common case
+/// (every DirectLiNGAM call, and CAMUV with the default `num_explanatory_vals`),
+/// so it is special-cased to a single subtraction rather than a 1-element loop.
+#[inline]
+fn sq_dist(x: ArrayView2<f64>, i: usize, j: usize) -> f64 {
+    if x.ncols() == 1 {
+        let d = x[[i, 0]] - x[[j, 0]];
+        d * d
+    } else {
+        let mut s = 0.0;
+        for c in 0..x.ncols() {
+            let d = x[[i, c]] - x[[j, c]];
+            s += d * d;
+        }
+        s
+    }
+}
+
+/// `get_kernel_width` (lingam/hsic.py): sqrt(0.5 * median of the positive squared
+/// pairwise distances over the first <=100 rows).
+fn kernel_width(x: ArrayView2<f64>) -> f64 {
+    let n = x.nrows().min(100);
     let mut dists = Vec::with_capacity(n * n.saturating_sub(1) / 2);
     for i in 0..n {
         for j in (i + 1)..n {
-            let d = (xm[i] - xm[j]).powi(2);
+            let d = sq_dist(x, i, j);
             if d > 0.0 {
                 dists.push(d);
             }
@@ -69,9 +95,9 @@ fn row_segments_mut(buf: &mut [f64], n: usize) -> Vec<&mut [f64]> {
 }
 
 /// Fill `out` with the strict upper triangle (row-major, `i < j`) of the RBF gram
-/// `exp(-(x_i - x_j)^2 / (2 w^2))`.
-fn build_upper(x: &[f64], width: f64, out: &mut [f64], parallel: bool) {
-    let n = x.len();
+/// `exp(-||x_i - x_j||^2 / (2 w^2))`, `x` an `(n, k)` array.
+fn build_upper(x: ArrayView2<f64>, width: f64, out: &mut [f64], parallel: bool) {
+    let n = x.nrows();
     let inv = -1.0 / (2.0 * width * width);
     if parallel {
         row_segments_mut(out, n)
@@ -79,28 +105,28 @@ fn build_upper(x: &[f64], width: f64, out: &mut [f64], parallel: bool) {
             .with_min_len(MIN_ROWS_PER_JOB)
             .enumerate()
             .for_each(|(i, seg)| {
-                let xi = x[i];
                 for (jj, slot) in seg.iter_mut().enumerate() {
-                    let d = xi - x[i + 1 + jj];
-                    *slot = (d * d * inv).exp();
+                    let d = sq_dist(x, i, i + 1 + jj);
+                    *slot = (d * inv).exp();
                 }
             });
     } else {
         let mut pos = 0;
         for i in 0..n.saturating_sub(1) {
-            let xi = x[i];
-            for &xj in &x[i + 1..] {
-                let d = xi - xj;
-                out[pos] = (d * d * inv).exp();
+            for j in (i + 1)..n {
+                let d = sq_dist(x, i, j);
+                out[pos] = (d * inv).exp();
                 pos += 1;
             }
         }
     }
 }
 
-/// `hsic_test_gamma(X, Y, bw_method="mdbs")` → `(test_stat, p_value)`.
-pub fn hsic_test_gamma(x: &[f64], y: &[f64]) -> (f64, f64) {
-    let n = x.len();
+/// `hsic_test_gamma(X, Y, bw_method="mdbs")` → `(test_stat, p_value)`, `X`/`Y`
+/// each `(n, k)` with `k >= 1` (matching `lingam.hsic.hsic_test_gamma`, which
+/// reshapes any 1-D input to `(n, 1)`).
+pub fn hsic_test_gamma(x: ArrayView2<f64>, y: ArrayView2<f64>) -> (f64, f64) {
+    let n = x.nrows();
     let nf = n as f64;
     if n >= PAR_THRESHOLD {
         pool::install(|| hsic_inner(x, y, n, nf, true))
@@ -109,7 +135,22 @@ pub fn hsic_test_gamma(x: &[f64], y: &[f64]) -> (f64, f64) {
     }
 }
 
-fn hsic_inner(x: &[f64], y: &[f64], n: usize, nf: f64, parallel: bool) -> (f64, f64) {
+/// Convenience wrapper for the single-column case: zero-copy view of each slice
+/// as an `(n, 1)` array, so this costs nothing over calling [`hsic_test_gamma`]
+/// directly with column vectors.
+pub fn hsic_test_gamma_1d(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let xa = ArrayView2::from_shape((x.len(), 1), x).expect("1-D to (n,1) view");
+    let ya = ArrayView2::from_shape((y.len(), 1), y).expect("1-D to (n,1) view");
+    hsic_test_gamma(xa, ya)
+}
+
+fn hsic_inner(
+    x: ArrayView2<f64>,
+    y: ArrayView2<f64>,
+    n: usize,
+    nf: f64,
+    parallel: bool,
+) -> (f64, f64) {
     let wx = kernel_width(x);
     let wy = kernel_width(y);
 
@@ -267,12 +308,13 @@ pub fn hsic_test_gamma_py(
             "X and Y must have the same length.",
         ));
     }
-    Ok(hsic_test_gamma(&xv, &yv))
+    Ok(hsic_test_gamma_1d(&xv, &yv))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::Array2;
 
     fn close(a: f64, b: f64, rtol: f64) {
         assert!(
@@ -285,9 +327,13 @@ mod tests {
     fn serial_and_parallel_paths_agree() {
         let n = 700usize;
         let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7).sin()).collect();
-        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.31).cos() + 0.2 * x[i]).collect();
-        let (s_stat, s_p) = hsic_inner(&x, &y, n, n as f64, false);
-        let (p_stat, p_p) = hsic_inner(&x, &y, n, n as f64, true);
+        let y: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.31).cos() + 0.2 * x[i])
+            .collect();
+        let xa = ArrayView2::from_shape((n, 1), &x).unwrap();
+        let ya = ArrayView2::from_shape((n, 1), &y).unwrap();
+        let (s_stat, s_p) = hsic_inner(xa, ya, n, n as f64, false);
+        let (p_stat, p_p) = hsic_inner(xa, ya, n, n as f64, true);
         close(s_stat, p_stat, 1e-9);
         close(s_p, p_p, 1e-9);
     }
@@ -303,9 +349,38 @@ mod tests {
             .collect();
         let dep: Vec<f64> = x.iter().map(|v| v * v).collect();
 
-        let (_, p_indep) = hsic_test_gamma(&x, &indep);
-        let (_, p_dep) = hsic_test_gamma(&x, &dep);
+        let (_, p_indep) = hsic_test_gamma_1d(&x, &indep);
+        let (_, p_dep) = hsic_test_gamma_1d(&x, &dep);
         assert!(p_dep < p_indep, "p_dep {p_dep} !< p_indep {p_indep}");
         assert!(p_dep < 0.05, "p_dep {p_dep} not significant");
+    }
+
+    /// `hsic_test_gamma` on a 1-column `X` against a 2-column `Y` must match
+    /// `lingam.hsic.hsic_test_gamma(X, Y)` exactly (reference values generated by
+    /// running the real implementation on this exact data).
+    #[test]
+    fn multi_column_y_matches_reference() {
+        let x = [
+            0.034193, 1.359748, 1.224721, -0.510307, -0.29797, -0.527384, 0.569726, -0.056064,
+            0.746886,
+        ];
+        let y0 = [
+            -1.847325, -0.096432, -0.136566, 0.46311, -0.20253, 0.685699, -1.514384, -0.670566,
+            -0.814054,
+        ];
+        let y1 = [
+            1.566549, 0.680378, -0.379099, 0.824514, -0.152786, -0.870341, 0.394982, -1.920341,
+            -0.467598,
+        ];
+        let n = x.len();
+        let mut y = Array2::<f64>::zeros((n, 2));
+        for i in 0..n {
+            y[[i, 0]] = y0[i];
+            y[[i, 1]] = y1[i];
+        }
+        let xa = ArrayView2::from_shape((n, 1), &x).unwrap();
+        let (stat, p) = hsic_test_gamma(xa, y.view());
+        close(stat, 0.330_192_119_787_092_5, 1e-9);
+        close(p, 0.671_313_380_004_021_9, 1e-9);
     }
 }

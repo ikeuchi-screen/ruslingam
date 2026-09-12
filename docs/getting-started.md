@@ -65,7 +65,7 @@ Re-run `maturin develop` after editing the Rust sources to rebuild.
 ### Verify
 
 ```bash
-python -c "from ruslingam import DirectLiNGAM; print('ok')"
+python -c "from ruslingam import DirectLiNGAM, CAMUV; print('ok')"
 ```
 
 ## Quick start
@@ -83,7 +83,8 @@ model.causal_order_                       # list[int]         - estimated topolo
 model.adjacency_matrix_                   # np.ndarray (p, p) - estimated coefficient matrix B
 ```
 
-See [DirectLiNGAM](/direct-lingam) for the full estimator API and
+See [DirectLiNGAM](/direct-lingam) for the full estimator API,
+[CAMUV](/camuv) for the confounder-aware estimator, and
 [BootstrapResult](/bootstrap) for the object returned by `model.bootstrap(...)`.
 
 ## What is implemented
@@ -95,8 +96,10 @@ See [DirectLiNGAM](/direct-lingam) for the full estimator API and
 | `prior_knowledge` (hard and soft) | ✅ |
 | `estimate_total_effect`, `get_error_independence_p_values` | ✅ |
 | `bootstrap` and the full `BootstrapResult` API | ✅ |
+| `CAMUV` with `independence="hsic"` | ✅ |
 | `ruslingam.hsic_test_gamma(x, y)` | ✅ |
 | `measure="kernel"`, `measure="pwling_fast"` | ❌ `NotImplementedError` |
+| `CAMUV`'s `independence="fcorr"` | ❌ `NotImplementedError` |
 | Other `lingam` estimators (`ICALiNGAM`, `VARLiNGAM`, …) | ❌ not ported |
 
 See [Differences from `lingam`](/differences) for the behavioural fine print.
@@ -110,9 +113,10 @@ pytest                  # Python tests; tests/test_parity.py compares against `l
                         # and is skipped automatically if `lingam` is not installed
 ```
 
-There are also two speed benchmarks against the reference implementation:
+There are also speed benchmarks against the reference implementation:
 
 ```bash
 python benchmarks/bench_direct_lingam.py   # lingam.DirectLiNGAM vs ruslingam.DirectLiNGAM
+python benchmarks/bench_camuv.py           # lingam.CAMUV vs ruslingam.CAMUV
 python benchmarks/bench_hsic.py            # lingam.hsic.hsic_test_gamma vs ruslingam.hsic_test_gamma
 ```

@@ -8,38 +8,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rayon::prelude::*;
 
-
-use crate::bootstrap::{calculate_total_effect, BootstrapResult};
+use crate::bootstrap::{BootstrapResult, calculate_total_effect};
+use crate::pyutil::to_array2;
 use crate::util::Rng;
-
-fn to_array2<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Array2<f64>> {
-    let np = py.import("numpy")?;
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("dtype", "float64")?;
-    let arr = np.getattr("asarray")?.call((obj,), Some(&kwargs))?;
-
-    let ndim: usize = arr.getattr("ndim")?.extract()?;
-    if ndim != 2 {
-        return Err(PyValueError::new_err(format!(
-            "Expected a 2D array for X, got a {ndim}D array."
-        )));
-    }
-
-    let ro: PyReadonlyArray2<f64> = arr.extract()?;
-    let owned = ro.as_array().to_owned();
-
-    if owned.iter().any(|v| !v.is_finite()) {
-        return Err(PyValueError::new_err(
-            "Input X contains NaN, infinity or a value too large.",
-        ));
-    }
-    if owned.nrows() < 1 || owned.ncols() < 1 {
-        return Err(PyValueError::new_err(
-            "Found array with 0 sample(s) or 0 feature(s).",
-        ));
-    }
-    Ok(owned)
-}
 
 /// `check_array(prior_knowledge)` followed by `np.where(Aknw < 0, np.nan, Aknw)`:
 /// require a finite 2D array, then map every negative entry (the `-1` "unknown"
@@ -166,10 +137,9 @@ impl DirectLiNGAM {
         from_index: usize,
         to_index: usize,
     ) -> PyResult<f64> {
-        let order = self
-            .causal_order
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("fit() must be called before estimate_total_effect()."))?;
+        let order = self.causal_order.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("fit() must be called before estimate_total_effect().")
+        })?;
         let b = self.adjacency_matrix.as_ref().unwrap();
         let data = to_array2(py, x)?;
         let (effect, order_ok) =
@@ -211,7 +181,7 @@ impl DirectLiNGAM {
             pairs
                 .par_iter()
                 .map(|&(i, j)| {
-                    let (_, pval) = crate::hsic::hsic_test_gamma(&cols[i], &cols[j]);
+                    let (_, pval) = crate::hsic::hsic_test_gamma_1d(&cols[i], &cols[j]);
                     (i, j, pval)
                 })
                 .collect()

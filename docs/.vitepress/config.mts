@@ -27,6 +27,7 @@ export default defineConfig({
         items: [
           { text: 'DirectLiNGAM', link: '/direct-lingam' },
           { text: 'BootstrapResult', link: '/bootstrap' },
+          { text: 'CAMUV', link: '/camuv' },
           { text: 'Module functions', link: '/module-functions' }
         ]
       }

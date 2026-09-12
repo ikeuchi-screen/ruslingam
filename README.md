@@ -63,7 +63,7 @@ Re-run `maturin develop` after editing the Rust sources to rebuild.
 ### Verify
 
 ```bash
-python -c "from ruslingam import DirectLiNGAM; print('ok')"
+python -c "from ruslingam import DirectLiNGAM, CAMUV; print('ok')"
 ```
 
 ## `DirectLiNGAM`
@@ -116,6 +116,41 @@ DirectLiNGAM(
   default hard mode and with `apply_prior_knowledge_softly=True`. An inconsistent
   matrix (asserting both `i -> j` and `j -> i`) raises `ValueError`.
 
+## `CAMUV`
+
+```python
+import numpy as np
+from ruslingam import CAMUV                # instead of: from lingam import CAMUV
+
+X = np.loadtxt("data.csv", delimiter=",")
+
+model = CAMUV()
+model.fit(X)
+
+model.adjacency_matrix_  # np.ndarray (p, p) - B[i,j]==1: x_j -> x_i;
+                         # B[i,j]==B[j,i]==nan: suspected shared latent confounder
+```
+
+### Constructor
+
+```python
+CAMUV(
+    alpha=0.01,
+    num_explanatory_vals=2,
+    independence="hsic",
+    ind_corr=0.5,
+    prior_knowledge=None,
+)
+```
+
+* `independence="hsic"` (the default, gamma-approximation HSIC test) is the only
+  supported independence test. `"fcorr"` raises `NotImplementedError`.
+* `num_explanatory_vals` caps how many explanatory variables are considered
+  together during the combinatorial parent search.
+* `prior_knowledge` is an iterable of `(from, to)` index pairs meaning "`x_from`
+  cannot be a direct cause of `x_to`" — a different shape from `DirectLiNGAM`'s
+  matrix form. Unvalidated, matching `lingam.CAMUV`.
+
 ## Threading
 
 The causal-order search runs in parallel. By default it uses one worker per
@@ -144,6 +179,12 @@ thread count.
 3. `measure="kernel"` and `measure="pwling_fast"` are not implemented yet.
 4. `BootstrapResult` count rankings use a stable sort; entries with equal counts
    may be ordered differently from NumPy's `argsort`.
+5. `CAMUV`'s `independence="fcorr"` is not implemented yet; only the default
+   `"hsic"` is supported.
+
+Only `DirectLiNGAM` (plus `BootstrapResult`), `CAMUV`, and `hsic_test_gamma` are
+ported — see [Differences from `lingam`](https://ikeuchi-screen.github.io/ruslingam/differences)
+for the full list and details.
 
 ## Development
 
