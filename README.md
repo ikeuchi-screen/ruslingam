@@ -60,6 +60,12 @@ maturin develop --release            # drop --release for a faster debug build
 
 Re-run `maturin develop` after editing the Rust sources to rebuild.
 
+
+```bash
+maturin build --release
+pip install target/wheels/*.whl
+```
+
 ### Verify
 
 ```bash
