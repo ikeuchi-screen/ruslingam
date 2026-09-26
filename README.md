@@ -194,3 +194,4 @@ maturin develop         # (re)build the extension
 pytest                  # Python tests; tests/test_parity.py compares against `lingam`
                         # and is skipped automatically if `lingam` is not installed
 ```
+
